@@ -9,6 +9,13 @@ function guid() {return S4()+S4()+S4()+S4();}
 if(typeof WebSocket == "undefined" && typeof MozWebSocket != "undefined")
     WebSocket = MozWebSocket;
 
+if(typeof requestAnimationFrame == "undefined") {
+    window.requestAnimationFrame = webkitRequestAnimationFrame ||
+                                   mozRequestAnimationFrame ||
+                                   oRequestAnimationFrame ||
+                                   msRequestAnimationFrame;
+}
+
 function createImage(id, url) {
     if(jgame.images[id]) {
         // Refresh the tileset when requested, but not anything else.
@@ -893,6 +900,7 @@ var jgutils = {
             var avatar = jgutils.avatars.registry["local"],
                 do_setcenter = false;
             function update_location() {
+                jgutils.avatars.draw("local");
                 jgutils.comm.send("loc", (avatar.x|0) + ":" + (avatar.y|0) + ":" + direction[0] + ":" + direction[1]);
             }
 
@@ -969,7 +977,6 @@ var jgutils = {
                     avatar.position = sprite_direction[1].position;
                     avatar.cycle_position = 0;
                     avatar.sprite_cycle = 0;
-                    jgutils.avatars.draw("local");
                     update_location()
                 }
                 do_setcenter = true;
@@ -997,7 +1004,6 @@ var jgutils = {
                 avatar.sprite_cycle = 0;
                 avatar.cycle_position = 0;
                 avatar.dirty = true;
-                jgutils.avatars.draw("local");
                 update_location();
             }
 
@@ -1022,56 +1028,58 @@ var jgutils = {
                     }
                 }
             }
-            if(do_setcenter)
-                jgutils.level.setCenterPosition();
-            else if(do_reposition_avs)
-                jgutils.avatars.reposition();
 
-            // Update Objects
-            for(objid in objects.registry) {
-                var obj = objects.registry[objid];
+            requestAnimationFrame(function() {
+                if(do_setcenter)
+                    jgutils.level.setCenterPosition();
+                else if(do_reposition_avs)
+                    jgutils.avatars.reposition();
 
-                var mod_sec = (obj.mod_seconds ? obj.mod_seconds : 1000),
-                    mod_dur = (obj.mod_duration ? obj.mod_duration : 1),
-                    otick = ticks / mod_dur % mod_sec;
+                // Update Objects
+                for(objid in objects.registry) {
+                    var obj = objects.registry[objid];
 
-                // Outsourced for easy update as well as setup.
-                var updated = objects.update(obj, otick, ticks, mod_sec);
+                    var mod_sec = (obj.mod_seconds ? obj.mod_seconds : 1000),
+                        mod_dur = (obj.mod_duration ? obj.mod_duration : 1),
+                        otick = ticks / mod_dur % mod_sec;
 
-                if(updated)
-                    objects.layers[obj.registry_layer].updated = true;
-            }
+                    // Outsourced for easy update as well as setup.
+                    var updated = objects.update(obj, otick, ticks, mod_sec);
 
-            // Redraw layers
-            for(l in objects.layers) {
-                var layer = objects.layers[l];
-                if(layer.updated) {
-                    var context = layer.obj.getContext('2d');
-                    context.clearRect(0,0,layer.obj.offsetWidth,layer.obj.offsetHeight);
+                    if(updated)
+                        objects.layers[obj.registry_layer].updated = true;
+                }
 
-                    for(co in layer.child_objects) {
-                        var child = layer.child_objects[co],
-                            li = child.last_image;
-                        if("sprite" in child.last_image)
-                            context.drawImage(jgame.images[li.image], li.sprite.x, li.sprite.y,
-                                              li.sprite.swidth, li.sprite.sheight,
-                                              child.x, child.y,
-                                              li.sprite.awidth, li.sprite.aheight);
-                        else
-                            context.drawImage(jgame.images[li.image], child.x, child.y);
+                // Redraw layers
+                for(l in objects.layers) {
+                    var layer = objects.layers[l];
+                    if(layer.updated) {
+                        var context = layer.obj.getContext('2d');
+                        context.clearRect(0,0,layer.obj.offsetWidth,layer.obj.offsetHeight);
+
+                        for(co in layer.child_objects) {
+                            var child = layer.child_objects[co],
+                                li = child.last_image;
+                            if("sprite" in child.last_image)
+                                context.drawImage(jgame.images[li.image], li.sprite.x, li.sprite.y,
+                                                  li.sprite.swidth, li.sprite.sheight,
+                                                  child.x, child.y,
+                                                  li.sprite.awidth, li.sprite.aheight);
+                            else
+                                context.drawImage(jgame.images[li.image], child.x, child.y);
+                        }
+                        layer.updated = false;
                     }
-                    layer.updated = false;
                 }
-            }
 
-            for(var register in timing.registers) {
-                var reg = timing.registers[register];
-                if(ticks - reg.last_called > reg.interval * 1000) {
-                    reg.callback(ticks);
-                    reg.last_called = ticks;
+                for(var register in timing.registers) {
+                    var reg = timing.registers[register];
+                    if(ticks - reg.last_called > reg.interval * 1000) {
+                        reg.callback(ticks);
+                        reg.last_called = ticks;
+                    }
                 }
-            }
-
+            });
         }
     }
 };
