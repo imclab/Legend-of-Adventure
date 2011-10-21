@@ -964,20 +964,26 @@ var jgutils = {
                 // Update the location of the avatar.
                 avatar.x = adjusted_x;
                 avatar.y = adjusted_y;
-
-                if(_x)
-                    update_y_hitmap();
-                if(_y)
+                
+                if(_x && _y) {
                     update_x_hitmap();
+                    update_y_hitmap();
+                }
 
-                var sprite_direction = jgutils.avatars.get_avatar_sprite_direction(direction)
+                var sprite_direction = jgutils.avatars.get_avatar_sprite_direction(direction);
                 if(direction[0] != avatar.direction[0] || direction[1] != avatar.direction[1]) {
                     avatar.dirty = true;
                     avatar.direction = direction;
                     avatar.position = sprite_direction[1].position;
                     avatar.cycle_position = 0;
                     avatar.sprite_cycle = 0;
-                    update_location()
+                    update_location();
+                    
+                    // Update the hitmaps.
+                    if(direction[0] || avatar.direction[0])
+                        update_x_hitmap();
+                    if(direction[1] || avatar.direction[1])
+                        update_y_hitmap();
                 }
                 do_setcenter = true;
 
