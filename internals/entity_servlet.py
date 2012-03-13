@@ -1,8 +1,9 @@
 import json
+from Queue import Queue
 import random
 import multiprocessing
-import os
 import threading
+import time
 
 import redis
 
@@ -14,8 +15,30 @@ from internals.locations import Location
 
 redis_host, port = constants.redis.split(":")
 
+LOOP_TICK = constants.GAME_LOOP_TICK / 1000
 MESSAGES_TO_IGNORE = ("spa", "epu", )
 MESSAGES_TO_INSPECT = ("del", "cha", )
+
+
+class ThreadedRedisReader(threading.Thread, object):
+
+    def __init__(self, pubsub):
+        super(ThreadedRedisReader, self).__init__()
+        self.pubsub = pubsub
+        self.output_queue = Queue()
+
+        self.start()
+
+    def run(self):
+        for event in self.pubsub.listen():
+            self.output_queue.put(event)
+
+    def events_waiting(self):
+        return not self.output_queue.empty()
+
+    def get_events(self):
+        while not self.output_queue.empty():
+            yield self.output_queue.get()
 
 
 class EntityServlet(multiprocessing.Process):
@@ -64,36 +87,68 @@ class EntityServlet(multiprocessing.Process):
         pubsub.subscribe("location::p::%s" % self.location)
         pubsub.subscribe("location::pe::%s" % self.location)
 
-        for event in pubsub.listen():
-            if event["type"] != "message":
-                continue
+        sub_manager = ThreadedRedisReader(pubsub)
 
-            message = event["data"]
-            location, full_message_data = message.split(">", 1)
-            if (event["channel"] == "global::enter" and
-                location == str(self.location)):
-                self.on_enter(full_message_data)
-                continue
-            if (event["channel"] == "global::drop" and
-                location == str(self.location)):
-                self.spawn_drop(full_message_data)
-                continue
+        last_loop_iteration = 0
 
-            message_type = full_message_data[:3]
-            message_data = full_message_data[3:]
+        # Enter the location's game loop.
+        while 1:
 
-            if (message_type in MESSAGES_TO_IGNORE or
-                (message_type in MESSAGES_TO_INSPECT and
-                 message_data.startswith("@"))):
-                continue
-            if message_type == "del":
-                # We don't need to split message_data because it's only one
-                # value.
-                self.on_leave(message_data)
+            now = time.time()
+            period = now - last_loop_iteration
 
-            # TODO: Event handling code goes here.
+            # If the duration since the last game tick isn't long enough, wait
+            # for a few milliseconds until the time has passed.
+            if period < LOOP_TICK:
+                time.sleep(LOOP_TICK - period)
+
+            # Handle any waiting events.
+            if sub_manager.events_waiting():
+                for event in sub_manager.get_events():
+                    if event["type"] != "message":
+                        continue
+                    self._handle_event(event)
+
+            # Handle any entity-related work.
             for entity in self.entities:
-                entity.handle_message(full_message_data)
+                # Fire off any waiting events for the entity.
+                entity.fire_events(now=now)
+                # If the entity has other work to do, take care of it.
+                if entity.has_work():
+                    entity.do_work(period)
+
+    def _handle_event(self, event):
+        """
+        This is a helper function that processes inbound events for this
+        region.
+        """
+
+        message = event["data"]
+        location, full_message_data = message.split(">", 1)
+        if (event["channel"] == "global::enter" and
+            location == str(self.location)):
+            self.on_enter(full_message_data)
+            return
+        if (event["channel"] == "global::drop" and
+            location == str(self.location)):
+            self.spawn_drop(full_message_data)
+            return
+
+        message_type = full_message_data[:3]
+        message_data = full_message_data[3:]
+
+        if (message_type in MESSAGES_TO_IGNORE or
+            (message_type in MESSAGES_TO_INSPECT and
+             message_data.startswith("@"))):
+            return
+        if message_type == "del":
+            # We don't need to split message_data because it's only one
+            # value.
+            self.on_leave(message_data)
+
+        # TODO: Event handling code goes here.
+        for entity in self.entities:
+            entity.handle_message(full_message_data)
 
     def on_enter(self, message_data, initial=False):
         """

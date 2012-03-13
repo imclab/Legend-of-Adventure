@@ -6,13 +6,13 @@ import re
 import time
 
 import redis
+from tornado.ioloop import IOLoop, PeriodicCallback
 import tornado.websocket
 
 import internals.constants as constants
 from internals.harmable import Harmable
 from internals.inventory import InventoryManager
 from internals.locations import Location
-from internals.scheduler import Scheduler
 
 
 REQUIRE_GUID = ("pos", "dir", "ups", "cha", )
@@ -50,8 +50,14 @@ class CommHandler(Harmable, InventoryManager,
         self.chat_name = ""
         self.last_update = 0
 
-        self.scheduler = Scheduler(constants.tilesize / constants.speed / 1000,
-                                   self._on_schedule_event)
+        # Create a new periodic callback that will allow the user's connection
+        # to recognize things like portals and keep track of position.
+        self.event_loop_callback = PeriodicCallback(
+                self._on_scheduled_event,
+                constants.tilesize / constants.speed)
+
+        self.last_event_tick = time.time()
+        self.event_loop_callback.start()
 
     def open(self):
         super(CommHandler, self).open()
@@ -118,7 +124,7 @@ class CommHandler(Harmable, InventoryManager,
 
         # Also perform the rescheduling before we hit the database so the
         # hitmapping isn't blocked on Redis.
-        self.scheduler.event_happened()
+        self._on_scheduled_event(scheduled=False)
 
         outbound_redis.set("l:p:%s" % self.id,
                            "%s:%d:%d" % (self.id, x, y))
@@ -244,11 +250,12 @@ class CommHandler(Harmable, InventoryManager,
 
         CommHandler.add_client(self.location, self)
 
-    def _on_schedule_event(self, scheduled):
+    def _on_scheduled_event(self, scheduled=True):
         """Handle scheduled events regarding position."""
 
         # If the user terminates while moving, stop updating them.
         if not self.location:
+            self.event_loop_callback.stop()
             return
 
         velocity = self.old_velocity if not scheduled else self.velocity
@@ -257,8 +264,9 @@ class CommHandler(Harmable, InventoryManager,
 
         # Recalculate the new approximate position.
         x, y = self.position
+        now = time.time()
         if scheduled:
-            duration = time.time() - self.scheduler.last_tick
+            duration = now - self.last_event_tick
             duration *= 1000
             x += velocity[0] * duration * constants.speed
             y += velocity[1] * duration * constants.speed
@@ -295,7 +303,12 @@ class CommHandler(Harmable, InventoryManager,
                                      portal["dest_coords"][1])
                     break
 
-        return any(self.velocity)
+        self.last_event_tick = now
+        moving = any(self.velocity)
+        if not moving and self.event_loop_callback._running:
+            self.event_loop_callback.stop()
+        elif moving and not self.event_loop_callback._running:
+            self.event_loop_callback.start()
 
     def _attacked(self, attack_distance, attacked_by, attacked_with):
         """Handle an attack on the player."""

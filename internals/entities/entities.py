@@ -1,18 +1,63 @@
 import json
 from math import sqrt
 import random
-import threading
 import time
 import uuid
 
 import internals.constants as constants
 from internals.hitmapping import get_hitmap
-from internals.scheduler import Scheduler
 
 
 DIRECTIONS = [(1, 0), (1, 1), (0, 1), (-1, 1), (-1, 0), (-1, -1), (0, -1),
               (1, -1)]
 SQRT1_2 = sqrt(float(1) / 2)
+
+
+class ScheduleHelper(object):
+    """
+    This is a helper mixin that allows you, with the use of an event loop,
+    to schedule events in the future. This class will figure out which events
+    should fire when the event loop comes around. It should be used instead of
+    threads and timers.
+    """
+
+    def __init__(self, *args, **kwargs):
+        super(ScheduleHelper, self).__init__(*args, **kwargs)
+
+        self.schedule_queue = []
+
+    def schedule(self, seconds, callback):
+        """
+        Fires `event` off in `seconds` seconds. If `seconds` is 0 (default),
+        the event will fire immediately.
+        """
+        then = time.time() + seconds
+        for i in xrange(len(self.schedule_queue)):
+            if self.schedule_queue[i][0] >= then:
+                self.schedule_queue.insert(i, (then, callback))
+                return
+
+        self.schedule_queue.append((then, callback))
+
+    def fire_events(self, now=None):
+        """Call this function to fire off any events that should have fired."""
+        if not now:
+            now = time.time()
+        for i in xrange(len(self.schedule_queue)):
+            then, event = self.schedule_queue[i]
+            if then <= now:
+                # Fire the event if it was supposed to fire in the past or
+                # present.
+                event()
+            else:
+                # If the event is in the future, trim the queue if we've fired
+                # anything off.
+                if i > 0:
+                    self.schedule_queue = self.schedule_queue[i:]
+                return
+
+        # If we fire all the events off, clear the queue.
+        self.schedule_queue = []
 
 
 class Entity(object):
@@ -211,7 +256,7 @@ class Entity(object):
             entity._player_movement(self.id, self.position[0], self.position[1])
 
 
-class Animat(Entity):
+class Animat(Entity, ScheduleHelper):
     """
     An animat is a game entity that is capable of performing animations and
     actions on its own.
@@ -219,9 +264,6 @@ class Animat(Entity):
 
     def __init__(self, *args, **kwargs):
         super(Animat, self).__init__(*args, **kwargs)
-        self.timers = []
-        self.scheduler = Scheduler(constants.tilesize / constants.speed / 1000 / 2,
-                                   self._on_scheduled_event)
 
         self.layer = 0
         self.image = None
@@ -244,10 +286,6 @@ class Animat(Entity):
 
         # Since we're being destroyed, delete all of our planned events.
         self.deschedule_all()
-        # Shut the scheduler up, too.
-        if self.scheduler.timer is not None:
-            self.scheduler.timer.cancel()
-            self.scheduler.timer = None
 
     def forget(self, guid):
         """
@@ -255,43 +293,16 @@ class Animat(Entity):
         focused around the user being despawned.
         """
         super(Animat, self).forget(guid)
-        for timer in self.timers:
-            if timer[2] == guid:
-               timer[1].cancel()
-               self.timers.remove(timer)
 
-    def schedule(self, seconds, callback=None, focus=None):
+    def schedule(self, seconds, callback=None):
         if not callback:
             callback = self._on_event
 
-        ts = int(time.time()) + seconds
-
-        # Provide a means of cleaning up the timer list.
-        def callback_wrapper():
-            if self.dead: return
-            for t in self.timers:
-                if t[0] == ts:
-                    if t in self.timers:
-                        self.timers.remove(t)
-                elif t[0] > ts:
-                    break
-            callback()
-
-        timer = threading.Timer(seconds, callback_wrapper)
-        timer.start()
-
-        index = 0
-        for t_ts, t_timer, t_focus in self.timers:
-            index += 1
-            if t_ts < ts:
-                self.timers.insert(index, (ts, timer, focus))
-                return
-        self.timers.append((ts, timer, focus))
+        super(Animat, self).schedule(seconds, callback)
 
     def deschedule_all(self):
         """Deschedule all of the events in the timer queue."""
-        for t_ts, t_timer, t_focus in self.timers:
-            t_timer.cancel()
+        self.schedule_queue = []
 
     def _on_event(self):
         """
@@ -312,7 +323,13 @@ class Animat(Entity):
         new_y = y + velocity[1] * duration * constants.speed * self.speed
         return new_x, new_y  # Be aware that this doesn't return an int!
 
-    def _on_scheduled_event(self, scheduled):
+    def has_work(self):
+        """
+        Returns whether the entity has any miscellaneous work to do.
+        """
+        return any(self.velocity)
+
+    def do_work(self, duration=0):
         """
         This is the method the fires intermittently as the animat moves across
         the level. It should be used to internally update the animat's
@@ -322,21 +339,17 @@ class Animat(Entity):
 
         if self.dead: return False
 
-        duration = time.time() - self.scheduler.last_tick
-        duration *= 1000
-
         now_moving = any(self.velocity)
         velocity = self.velocity if now_moving else self.old_velocity
 
-        if scheduled or not now_moving:
+        if not now_moving and any(velocity):
             # Calculate the updated position.
             self.position = self._updated_position(*self.position,
                                                    velocity=velocity,
                                                    duration=duration)
 
-        can_redirect = not scheduled
         should_redirect = None
-        if scheduled:
+        if now_moving:
             # Calculate the next position in this direction.
             future_position = self._updated_position(*self.position,
                                                      duration=duration)
@@ -346,7 +359,6 @@ class Animat(Entity):
                 self.move(0, 0)
                 # Also don't keep calculating the next position.
                 now_moving = False
-                can_redirect = True
 
         if self.should_weight_directions:
             optimal_direction = self._get_best_direction(weighted=True)
@@ -354,7 +366,7 @@ class Animat(Entity):
                 optimal_direction != self.velocity):
                 should_redirect = optimal_direction
 
-        if scheduled and should_redirect:
+        if now_moving and should_redirect:
             self.move(*should_redirect, event=False)
         elif now_moving:
             # We're moving, didn't stop, and didn't hit a wall.
@@ -363,8 +375,6 @@ class Animat(Entity):
                     continue
                 entity._player_movement(self.id, self.position[0],
                                         self.position[1])
-
-        return now_moving
 
     def _get_best_direction(self, weighted=False):
         def calculate_next_position(velocity):
@@ -460,12 +470,6 @@ class Animat(Entity):
         self.hitmap = get_hitmap((self.position[0] - self.offset[0],
                                   self.position[1]),
                                  self.location.location.generate()[1])
-
-        if event:
-            self.scheduler.event_happened()
-            if not now_moving:
-                # Deschedule doesn't call event_happened.
-                self.scheduler.deschedule()
 
         if broadcast:
             self.broadcast_changes(*self._movement_properties)

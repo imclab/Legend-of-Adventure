@@ -24,4 +24,5 @@ CHASE_DISTANCE = 25
 # The distance that an attack hurts from.
 HURT_DISTANCE = 1
 
+GAME_LOOP_TICK = 50  # 50ms
 TICK = 1.0 / framerate

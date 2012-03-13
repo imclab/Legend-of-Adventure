@@ -119,12 +119,12 @@ class SentientAnimat(Harmable, Animat):
 
         super(SentientAnimat, self).stop_wandering()
 
-    def _on_scheduled_event(self, *args, **kwargs):
+    def do_work(self, *args, **kwargs):
         """
         Recalculate all of the distances that we've seen. Don't wait for the
         other person to move.
         """
-        output = super(SentientAnimat, self)._on_scheduled_event(*args, **kwargs)
+        output = super(SentientAnimat, self).do_work(*args, **kwargs)
         s_x, s_y = self.position
         for guid in self.remembered_positions:
             x, y = self.remembered_positions[guid]
