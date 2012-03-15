@@ -36,20 +36,27 @@ class Soldier(NPC):
     def _get_unexpected_time(self):
         return random.randint(2, 4)
 
-    def _attacked(self, attack_distance, attacked_by, attacked_with):
-        """Always attack any attacker."""
-        if attacked_by.startswith(self.get_prefix()):
+    def _saw_attack(self, attacker):
+        """Soliders will always attack any attacker."""
+
+        # Ignore other soliders.
+        if attacker.startswith(self.get_prefix()):
             return
-        super(Soldier, self)._attacked(attack_distance, attacked_by,
-                                       attacked_with)
+
+        if attacker not in self.remembered_distances:
+            # This probably shouldn't ever occur, but if it does, treat it like
+            # it was a surprise attack and ignore it.
+            return
+
+        attack_distance = self.remembered_distances[attacker]
 
         # If we're already chasing someone, fight off the person that's now
         # attacking us.
-        if attack_distance < HURT_DISTANCE and self.chasing != attacked_by:
+        if attack_distance < HURT_DISTANCE and self.chasing != attacker:
             self._chase_queue.insert(0, self.chasing)
             self.chasing = None
 
-        self.chase(attacked_by)
+        self.chase(attacker)
 
     def can_place_at(self, x, y, grid, hitmap):
         return grid[y][x] in PLACEABLE_LOCATIONS and not hitmap[y][x]

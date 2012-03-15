@@ -310,13 +310,12 @@ class CommHandler(Harmable, InventoryManager,
         elif moving and not self.event_loop_callback._running:
             self.event_loop_callback.start()
 
-    def _attacked(self, attack_distance, attacked_by, attacked_with):
+    def _attacked(self, attacked_by, attacked_with):
         """Handle an attack on the player."""
         if attacked_by == self.id:
             return
         print self.id, "attacked by", attacked_by
-        if attack_distance < constants.HURT_DISTANCE:
-            self.harmed_by(attacked_with, guid=attacked_by)
+        self.harmed_by(attacked_with, guid=attacked_by)
 
     def update_health(self):
         if self.health == 0:

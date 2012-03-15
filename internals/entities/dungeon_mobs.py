@@ -7,25 +7,27 @@ from npc import NPC
 from sentient import CHASE, SentientAnimat
 
 
+EVIL_DOER_PREFIX = "^"
+
+
 class EvilDoer(AnimatSprite):
 
     def get_prefix(self):
         """Carat is the new evil."""
-        return "^"
+        return EVIL_DOER_PREFIX
 
     def chase(self, guid):
-        if guid.startswith("^"):
+        if guid.startswith(EVIL_DOER_PREFIX):
             return
         super(EvilDoer, self).chase(guid)
 
-    def _attacked(self, attack_distance, attacked_by, attacked_with):
-        if attacked_by.startswith("^"):
+    def _attacked(self, attacked_by, attacked_with):
+        if attacked_by.startswith(EVIL_DOER_PREFIX):
             return
-        super(EvilDoer, self)._attacked(attack_distance, attacked_by,
-                                        attacked_with)
+        super(EvilDoer, self)._attacked(attacked_by, attacked_with)
 
     def on_player_range(self, guid, distance):
-        if guid.startswith("^"):
+        if guid.startswith(EVIL_DOER_PREFIX):
             return
         super(EvilDoer, self).on_player_range(guid, distance)
 
@@ -156,7 +158,7 @@ class FallenAngel(NPC):
 
         self.wander()
 
-    def _attacked(self, attack_distance, attacked_by, attacked_with):
-        if attack_distance < HURT_DISTANCE:
-            self.chase(attacked_by)
+    def _attacked(self, attacked_by, attacked_with):
+        # Don't do any damage. Angels can't be killed, silly.
+        self.chase(attacked_by)
 

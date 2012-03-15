@@ -10,7 +10,7 @@ from internals.hitmapping import get_hitmap
 
 DIRECTIONS = [(1, 0), (1, 1), (0, 1), (-1, 1), (-1, 0), (-1, -1), (0, -1),
               (1, -1)]
-SQRT1_2 = sqrt(float(1) / 2)
+SQRT1_2 = sqrt(0.5)
 
 
 class ScheduleHelper(object):
@@ -75,7 +75,6 @@ class Entity(object):
         self.location = location
         self.offset = 0, 0
 
-        self.remembered_positions = {}
         self.remembered_distances = {}
 
     def get_prefix(self):
@@ -91,7 +90,6 @@ class Entity(object):
         """
         if guid in self.remembered_distances:
             del self.remembered_distances[guid]
-            del self.remembered_positions[guid]
 
     def can_despawn(self):
         # TODO: Implement this!
@@ -137,9 +135,7 @@ class Entity(object):
             guid, chat_data = message.split(":", 1)
 
             # Filter out chat from entities, this should be handled directly.
-            if guid.startswith("@"):  # Entity IDs start with an '@'.
-                print "Un-optimal message passing. int.ent.entities.Entity#70"
-                return
+            assert not guid.startswith("@")  # Entity IDs start with an '@'.
 
             chat_data = chat_data.split("\n", 1)[1]
             if guid not in self.remembered_distances:
@@ -177,7 +173,6 @@ class Entity(object):
             if old_distance == distance:
                 return
         self.remembered_distances[guid] = distance
-        self.remembered_positions[guid] = x, y
         self.on_player_range(guid, distance)
 
     def on_player_range(self, guid, distance):
@@ -317,7 +312,7 @@ class Animat(Entity, ScheduleHelper):
 
         # Adjust for diagonals
         if all(velocity):
-            velocity = map(lambda x: x * SQRT1_2, velocity)
+            velocity = velocity[0] * SQRT1_2, velocity[1] * SQRT1_2
 
         new_x = x + velocity[0] * duration * constants.speed * self.speed
         new_y = y + velocity[1] * duration * constants.speed * self.speed
@@ -342,11 +337,10 @@ class Animat(Entity, ScheduleHelper):
         now_moving = any(self.velocity)
         velocity = self.velocity if now_moving else self.old_velocity
 
-        if not now_moving and any(velocity):
-            # Calculate the updated position.
-            self.position = self._updated_position(*self.position,
-                                                   velocity=velocity,
-                                                   duration=duration)
+        # Calculate the updated position.
+        self.position = self._updated_position(*self.position,
+                                               velocity=velocity,
+                                               duration=duration)
 
         should_redirect = None
         if now_moving:
@@ -376,24 +370,30 @@ class Animat(Entity, ScheduleHelper):
                 entity._player_movement(self.id, self.position[0],
                                         self.position[1])
 
-    def _get_best_direction(self, weighted=False):
+    def get_movable_directions(self):
+        """
+        Return a list of directions that the entity can move in, given its
+        current position.
+        """
         def calculate_next_position(velocity):
             new_position = self._updated_position(*self.position,
                                                   velocity=velocity)
             return self._test_position(new_position, velocity)
 
-        usable_directions = filter(calculate_next_position, DIRECTIONS)
+        return filter(calculate_next_position, DIRECTIONS)
 
-        if weighted:
-            weights = dict((direction,
-                            self._get_direction_weight(direction)) for
-                           direction in
-                           usable_directions)
+    def _get_best_direction(self, weighted=False):
+        """
+        If the entity were to be stopped and forced to choose a new direction
+        to move in based on surrounding entities and players, which direction
+        would it move in?
 
-            if weights:
-                max_weight = max(weights.values())
-                usable_directions = filter(lambda d: weights[d] == max_weight,
-                                           usable_directions)
+        If `weighted` is false, surrounding entities will not be considered.
+        Rather, this function will simply alias `get_movable_directions`. This
+        base class does not implement `weighted` by default, and has no concept
+        of direction weight.
+        """
+        usable_directions = self.get_movable_directions()
 
         if len(usable_directions) == 1:
             return usable_directions[0]
@@ -404,10 +404,6 @@ class Animat(Entity, ScheduleHelper):
             return
 
         return random.choice(usable_directions)
-
-    def _get_direction_weight(self, direction):
-        """To be implemented by inheriting classes."""
-        return 0
 
     def _test_position(self, position, velocity=None):
         """

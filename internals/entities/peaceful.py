@@ -1,7 +1,4 @@
-from math import sqrt
-
-from internals.constants import FLEE_DISTANCE, HURT_DISTANCE
-from items import WEAPONS, WEAPON_PREFIXES
+from internals.constants import FLEE_DISTANCE
 from sentient import SentientAnimat
 
 
@@ -11,15 +8,14 @@ class PeacefulAnimat(SentientAnimat):
     it is attacked.
     """
 
-    def _attacked(self, attack_distance, attacked_by, attacked_with):
+    def _saw_attack(self, attacker):
         """
-        This method is called when an attack is received within a relatively
-        close proximity to the entity.
+        Detect attacks that are close to the entity and flee if necessary.
         """
 
-        if attack_distance < FLEE_DISTANCE:
-            self.flee(attacked_by)
-
-        if attack_distance < HURT_DISTANCE:
-            self.harmed_by(attacked_with, guid=attacked_by)
+        # If the attack/hit happened less than FLEE_DISTANCE away, flee the
+        # attacker.
+        if (attacker in self.remembered_distances and
+            self.remembered_distances[attacker] < FLEE_DISTANCE):
+            self.flee(attacker)
 

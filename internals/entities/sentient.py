@@ -1,5 +1,5 @@
-from math import sqrt
-from random import randint
+from math import asin, pi, sqrt
+from random import choice, randint
 import time
 
 from internals.constants import (CHASE_DISTANCE, FLEE_DISTANCE, HURT_DISTANCE,
@@ -14,21 +14,8 @@ CHASE = 2
 
 REEVALUATE_TIME = 0.675
 
-
-def get_guid_position(guid, self):
-    """Get the position of an entity the hard way."""
-    # FIXME: This function is called once per direction per update per entity. !!!!!
-    # A good solution might be to have a function for the entity to precache all of
-    # the stuff that it needs, then do the direction testing.
-    try:
-        entity = (e for e in self.location.entities if e.id == self.chasing).next()
-        position = entity.position
-        # Since we look it up, we'd might as well store it.
-        self.remembered_positions[guid] = position
-        return position
-    except StopIteration:
-        # It's probably a player, not an entity :-/
-        return self.remembered_positions[guid]
+CONVERTED_DIRECTIONS = {0: (1, 0), 45: (1, -1), 90: (0, -1), 135: (-1, -1),
+                        180: (-1, 0), 225: (-1, 1), 270: (0, 1), 315: (1, 1)}
 
 
 class SentientAnimat(Harmable, Animat):
@@ -42,6 +29,7 @@ class SentientAnimat(Harmable, Animat):
 
         self.fleeing = set()
         self.chasing = None
+        self.flee_point = None
 
         self.holding_item = None
 
@@ -53,8 +41,7 @@ class SentientAnimat(Harmable, Animat):
     def forget(self, guid):
         super(SentientAnimat, self).forget(guid)
 
-        if guid in self.fleeing:
-            self.fleeing.discard(guid)
+        self.stop_fleeing(guid)
 
         if self.chasing == guid:
             self.chasing = None
@@ -101,9 +88,8 @@ class SentientAnimat(Harmable, Animat):
             return
         self.last_attack = now
 
-        x, y = get_guid_position(guid, self)
         self.location.notify_location(
-            "atk", "%s:%s:%d:%d" % (self.id, self.holding_item or "", x, y),
+            "atk", "%s:%s:%s" % (self.id, self.holding_item or "", guid),
             to_entities=True)
 
     def wander(self):
@@ -124,14 +110,17 @@ class SentientAnimat(Harmable, Animat):
         Recalculate all of the distances that we've seen. Don't wait for the
         other person to move.
         """
-        output = super(SentientAnimat, self).do_work(*args, **kwargs)
-        s_x, s_y = self.position
-        for guid in self.remembered_positions:
-            x, y = self.remembered_positions[guid]
-            self.remembered_distances[guid] = sqrt((s_x - x) ** 2 +
-                                                   (s_y - y) ** 2) / tilesize
+        # Do the work that the entity has to do first.
+        super(SentientAnimat, self).do_work(*args, **kwargs)
 
-        return output
+        # If we're moving, recalculate the distance to other entities.
+        if any(self.velocity):
+            x, y = self.position
+            for entity in (self.location.entities +
+                           self.location.players.values()):
+                e_x, e_y = entity.position
+                self.remembered_distances[entity.id] = (
+                        sqrt((x - e_x) ** 2 + (y - e_y) ** 2) / tilesize)
 
     def _reevaluate_behavior(self):
         """
@@ -151,98 +140,192 @@ class SentientAnimat(Harmable, Animat):
             if not self.fleeing:
                 return False
         else:
-
+            dont_move = False
             # Toss out an attack if we can.
             if self.chasing:
-                if (self.does_attack and
-                    self.remembered_distances[self.chasing] <=
-                        1.5 * HURT_DISTANCE):
+                chasing_distance = self.remembered_distances[self.chasing]
+                if self.does_attack and chasing_distance <= HURT_DISTANCE:
                     self.attack(self.chasing)
-                if self.remembered_distances[self.chasing] < 2:
+                if chasing_distance < 2:
                     self.move(0, 0)
+                    dont_move = True
 
-
-            best_direction = self._get_best_direction(weighted=True)
-            if best_direction is None:
-                self.move(0, 0)
-                self.schedule(3, self.wander)
-                return False
-            elif best_direction != self.velocity:
-                self.move(*best_direction)
+            if not dont_move:
+                best_direction = self._get_best_direction(weighted=True)
+                if best_direction is None:
+                    self.move(0, 0)
+                    self.schedule(3, self.wander)
+                    return False
+                elif best_direction != self.velocity:
+                    self.move(*best_direction)
 
         self.schedule(REEVALUATE_TIME + randint(5, 7) / 11,
                       self._reevaluate_behavior)
         return True
 
-    def _get_direction_weight(self, direction):
+    def _get_best_direction(self, weighted=False):
         """
-        Returns the signed delta of distances with tracked GUIDs.
+        An implementation of `Entity._get_best_direction` that implements
+        `weighted`.
         """
 
-        x, y = self._updated_position(*self.position,
-                                      velocity=direction)
+        # If we cannot weight our decision, leave it up to the (optimized) base
+        # class version of the function.
+        behavior = self._flee_or_chase()
+        if behavior is None:
+            return super(SentientAnimat, self)._get_best_direction()
 
-        def get_gdelta(position):
-            """Return the distance of the GUID to the entity."""
-            g_x, g_y = position
-            return sqrt((x - g_x) ** 2 + (y - g_y) ** 2)
+        usable_directions = self.get_movable_directions()
 
-        def get_flee_delta():
-            flee_delta = 0
-            for guid in self.fleeing:
-                g_delta = get_gdelta(get_guid_position(guid, self))
-                g_delta -= self.remembered_distances[guid]
+        if not usable_directions:
+            # If we can't move, don't move.
+            return
+        elif len(usable_directions) == 1:
+            # If we can only move in one direction, move in that direction.
+            return usable_directions[0]
 
-                flee_delta += g_delta
-            return flee_delta
+        x, y = self.position
+        if weighted:
 
-        def get_chase_delta():
-            # Get the position straight from the location handler. We want this
-            # to be incredibly fresh. Do it as a generator so it only loops
-            # until we find the right one. Use next() to get the first one.
-            g_delta = get_gdelta(get_guid_position(self.chasing, self))
-            g_delta /= tilesize
-            g_delta -= self.remembered_distances[self.chasing]
+            def get_angle(e_x, e_y):
+                """
+                Convert a set of coordinates (with respect to the current
+                entity's position) to an angle representing the direction
+                that the coordinates are located in. The angle will always be
+                rounded to one of the eight cardinal directions. It will be in
+                degrees and not radians to avoid floating point numbers.
+                """
+                pre_trig = ((y - e_y) / sqrt((x - e_x) ** 2 + (y - e_y) ** 2))
+                theta = asin(pre_trig)
 
-            return 0 - g_delta
+                # Convert to degrees so we're not dealing with floating point
+                # numbers.
+                theta /= 2 * pi
+                theta *= 360
 
-        if self.fleeing and self.chasing:
-            if self.prefer_behavior == FLEE:
-                return get_flee_delta()
+                # Round to the nearest cardinal direction.
+                theta += 22  # Rounded from 22.5; we don't need to round "back"
+                theta -= theta % 45
+                return theta % 360
+
+            def alternate_angles(angle):
+                """Return the alternate angles by "best weight"."""
+                for count in range(1, 5):
+                    yield (angle + 45 * count) % 360
+                    yield (angle - 45 * count) % 360
+
+            all_entities = (self.location.entities +
+                            self.location.players.values())
+            def get_position(guid):
+                """
+                Return the position of a player/entitiy. This function should
+                only be used when a single entity needs to be looked up, since
+                it runs in O(N) time.
+                """
+                for e in all_entities:
+                    if e.id == guid:
+                        return e.position
+
+            if behavior == FLEE:
+                num_fe = len(self.fleeing)
+                all_entities = (self.location.entities +
+                                self.location.players.values())
+                if num_fe > 1:
+                    # Get the average of the chasers' positions. We'll flee
+                    # from that point.
+                    chasers = [e for e in all_entities if e.id in self.fleeing]
+                    # This next line may look slow, but there are only a few
+                    # chasers at any given time, so it's ok.
+                    flee_position = (
+                            sum(e.position[0] for e in chasers) / num_fe,
+                            sum(e.position[1] for e in chasers) / num_fe)
+                else:
+                    # Get the chaser's position.
+                    flee_position = get_position(self.fleeing.copy().pop())
+
+                # We need to reverse the angle (+180, %360) because we're
+                # fleeing and not chasing.
+                angle = (get_angle(*flee_position) + 180) % 360
+
+            else:  # CHASE
+                # It's so nice and simple because we just need the angle for a
+                # single point. And we're going towards it, too!
+                angle = get_angle(*get_position(self.chasing))
+
+            # If we can use that angle, go with it. If we can't, look through
+            # the list of alternate angles until there's an open angle.
+            if CONVERTED_DIRECTIONS[angle] in usable_directions:
+                return CONVERTED_DIRECTIONS[angle]
             else:
-                return get_chase_delta()
+                for angle_delta in alternate_angles(angle):
+                    new_angle = angle + angle_delta
+                    if CONVERTED_DIRECTIONS[new_angle] in usable_directions:
+                        return CONVERTED_DIRECTIONS[new_angle]
+                # We shouldn't ever get here, but if we do, we should just fall
+                # back on random choice (below).
+
+        return choice(usable_directions)
+
+    def _flee_or_chase(self):
+        """
+        Return `FLEE` if the entity should flee or `CHASE` if the entity should
+        be chasing. If entity is neither fleeing nor chasing, return `None`.
+        """
+        if self.fleeing and self.chasing:
+            return FLEE if self.prefer_behavior == FLEE else CHASE
         elif self.fleeing:
-            return get_flee_delta()
+            return FLEE
         elif self.chasing:
-            return get_chase_delta()
+            return CHASE
         else:
-            return 0
+            return None
 
     def _handle_message(self, type, message):
         """Here, we're going to intercept attack commands and process them."""
 
         super(SentientAnimat, self)._handle_message(type, message)
 
-        if type != "atk":
+        if type not in ("atk", "hit"):
             return
 
-        guid, item, x, y = message.split(":")
-        if guid == self.id:
-            return
+        data = message.split(":")
+        # Fire off the _saw_attack function.
+        self._saw_attack(attacker=data[0])
 
-        position = map(float, [x, y])
-        position = map(int, position)
-        attack_distance = sqrt((self.position[0] - position[0]) ** 2 +
-                               (self.position[1] - position[1]) ** 2)
+        if type == "atk":  # Pre-determined attack
+            guid, item, atk_guid = data
+            if guid == self.id or atk_guid != self.id:
+                return
+        elif type == "hit":  # Directed hit
+            guid, item, a_x, a_y = data
+            if guid == self.id:
+                return
 
-        attack_distance /= tilesize
-        self._attacked(attack_distance, guid, item)
+            # Calculate how far away the hit is.
+            a_x, a_y = float(a_x), float(a_y)
+            atk_distance = sqrt((self.position[0] - a_x) ** 2 +
+                                (self.position[1] - a_y) ** 2)
+            # If the attack is too far away, just ignore it.
+            if atk_distance > HURT_DISTANCE:
+                return
 
-    def _attacked(self, attack_distance, attacked_by, attacked_with):
+        self._attacked(guid, item)
+
+    def _attacked(self, attacked_by, attacked_with):
         """
-        This should not be overridden if the inheriting class's _attacked
-        implementation harms the entity.
+        This is a stub that is called when the entity is specifically attacked.
+        It will not be called when the entity suffers environmental or self-
+        inflicted damage.
         """
-        if attack_distance <= HURT_DISTANCE:
-            self.harmed_by(attacked_with, guid=attacked_by)
+        self.harmed_by(attacked_with, guid=attacked_by)
+
+    def _saw_attack(self, attacker):
+        """
+        This will be called when the entity witnesses an attack. The attack may
+        or may not be on the entity itself. The attack may not have been
+        directed at any other entity (i.e.: a user swung his sword).
+
+        This method is meant to be overridden.
+        """
+        pass
 

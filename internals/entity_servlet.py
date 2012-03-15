@@ -1,5 +1,5 @@
-import json
-from Queue import Queue
+from math import sqrt
+from Queue import Queue, Empty
 import random
 import multiprocessing
 import threading
@@ -8,6 +8,7 @@ import time
 import redis
 
 import internals.constants as constants
+from internals.constants import tilesize
 import internals.entities.items as items
 from internals.entities.entities import Animat
 from internals.locations import Location
@@ -22,10 +23,12 @@ MESSAGES_TO_INSPECT = ("del", "cha", )
 
 class ThreadedRedisReader(threading.Thread, object):
 
-    def __init__(self, pubsub):
+    def __init__(self, pubsub, outbound):
         super(ThreadedRedisReader, self).__init__()
         self.pubsub = pubsub
+        self.outbound = outbound
         self.output_queue = Queue()
+        self.input_queue = Queue()
 
         self.start()
 
@@ -40,6 +43,64 @@ class ThreadedRedisReader(threading.Thread, object):
         while not self.output_queue.empty():
             yield self.output_queue.get()
 
+    def publish(self, channel, message):
+        """Queue a message to be send to the front end."""
+        self.input_queue.put((channel, message))
+
+    def flush(self):
+        """Push all queued messages to the front end."""
+
+        # TODO: Implement multi-message packets here.
+        try:
+            while not self.input_queue.empty():
+                channel, message = self.input_queue.get(False)
+                self.outbound.publish(channel, message)
+        except Empty:
+            # If we hit the bottom of the queue, just move along.
+            pass
+
+
+class SimulatedPlayer(object):
+    """
+    A simulated player object is used as a caching mechanism. Rather than
+    pushing player location over and over through redis, only the player's
+    changes in direction and velocity are broadcast (as they would be to other
+    players). This information is then used, with the help of the event loop,
+    to predict the player's location and status at any given time.
+    """
+
+    def __init__(self, guid):
+        self.id = guid
+        self.position = 0, 0
+        self.velocity = 0, 0
+        self.updated = False
+
+    def post_velocity(self, x, y, x_vel, y_vel):
+        """Post an updated position and velocity."""
+        self.position = map(int, (x, y))
+        self.velocity = map(int, (x_vel, y_vel))
+
+        self.updated = True
+
+    def on_tick(self, period):
+        """Simulate an update based on the duration of the game tick."""
+        x_vel, y_vel = self.velocity
+
+        did_update = False
+        if x_vel:
+            self.position[0] += x_vel * period * constants.speed
+            did_update = True
+        if y_vel:
+            self.position[1] += y_vel * period * constants.speed
+            did_update = True
+
+        if did_update or self.updated:
+            self.updated = False
+            x, y = self.position
+            return lambda e: sqrt((e.position[0] - x) ** 2 +
+                                  (e.position[1] - y) ** 2) / tilesize
+
+        return None
 
 class EntityServlet(multiprocessing.Process):
     """
@@ -54,16 +115,8 @@ class EntityServlet(multiprocessing.Process):
         self._initial_message_data = message_data
 
         self.entities = []
-        self.players = set()
+        self.players = {}
         self.ttl = None
-
-    def _setup(self):
-        redis_host, port = constants.redis.split(":")
-        self.outbound_redis = redis.Redis(host=redis_host, port=int(port))
-
-        if self._initial_message_data:
-            self.on_enter(self._initial_message_data, initial=True)
-            self._initial_message_data = None
 
     def _end(self):
         # Cancel any TTL timer.
@@ -77,8 +130,10 @@ class EntityServlet(multiprocessing.Process):
         self.terminate()
 
     def run(self):
-
-        self._setup()
+        redis_host, port = constants.redis.split(":")
+        # We probably don't need a second connection since the pubsub object
+        # establishes its own.
+        ##outbound_redis = redis.Redis(host=redis_host, port=int(port))
 
         inbound_redis = redis.Redis(host=redis_host, port=int(port))
         pubsub = inbound_redis.pubsub()
@@ -87,13 +142,17 @@ class EntityServlet(multiprocessing.Process):
         pubsub.subscribe("location::p::%s" % self.location)
         pubsub.subscribe("location::pe::%s" % self.location)
 
-        sub_manager = ThreadedRedisReader(pubsub)
+        self.sub_manager = ThreadedRedisReader(pubsub, inbound_redis)
+
+        # If we got message data that started up the servlet, handle it now.
+        if self._initial_message_data:
+            self.on_enter(self._initial_message_data, initial=True)
+            self._initial_message_data = None
 
         last_loop_iteration = 0
 
         # Enter the location's game loop.
         while 1:
-
             now = time.time()
             period = now - last_loop_iteration
 
@@ -103,8 +162,8 @@ class EntityServlet(multiprocessing.Process):
                 time.sleep(LOOP_TICK - period)
 
             # Handle any waiting events.
-            if sub_manager.events_waiting():
-                for event in sub_manager.get_events():
+            if self.sub_manager.events_waiting():
+                for event in self.sub_manager.get_events():
                     if event["type"] != "message":
                         continue
                     self._handle_event(event)
@@ -116,6 +175,26 @@ class EntityServlet(multiprocessing.Process):
                 # If the entity has other work to do, take care of it.
                 if entity.has_work():
                     entity.do_work(period)
+
+            # Iterate each player and see if there's any work to do.
+            for guid, player in self.players.items():
+                output = player.on_tick(period)
+                if output:
+                    for entity in self.entities:
+                        # Calculate the player's new distance.
+                        distance = int(output(entity))
+                        # Ignore the update if there's no change in distance.
+                        if (guid in entity.remembered_distances and
+                            entity.remembered_distances == distance):
+                            continue
+                        # Save the new distance.
+                        entity.remembered_distances[guid] = distance
+                        entity.on_player_range(guid, distance)
+
+            # Flush any waiting messages to the front end.
+            self.sub_manager.flush()
+
+            last_loop_iteration = now
 
     def _handle_event(self, event):
         """
@@ -145,6 +224,10 @@ class EntityServlet(multiprocessing.Process):
             # We don't need to split message_data because it's only one
             # value.
             self.on_leave(message_data)
+        elif message_type == "loc":
+            # We have our own mechanism for updated the location of players.
+            guid, x, y, x_vel, y_vel = message_data.split(":")
+            self.players[guid].post_velocity(x, y, x_vel, y_vel)
 
         # TODO: Event handling code goes here.
         for entity in self.entities:
@@ -170,7 +253,7 @@ class EntityServlet(multiprocessing.Process):
 
         guid = message_data.split(":")[0]
         print "Registering user %s" % guid
-        self.players.add(guid)
+        self.players[guid] = SimulatedPlayer(guid)
 
         # TODO: Move this responsibility to the web server and just keep a copy
         # of the entity data in Redis.
@@ -187,7 +270,7 @@ class EntityServlet(multiprocessing.Process):
         for entity in self.entities:
             entity.forget(user)
 
-        self.players.discard(user)
+        del self.players[user]
         if not self.players:
             print "Last player left %s, preparing for cleanup." % self.location
 
@@ -236,8 +319,7 @@ class EntityServlet(multiprocessing.Process):
 
             print "  > %s at (%d, %d)" % (str(entity), x, y)
 
-            e.place(x * constants.tilesize, y * constants.tilesize)
-            placeable_locations = None  # Free up that memory!
+            e.place(x * tilesize, y * tilesize)
             self.entities.append(e)
             self.spawn_entity(e)
 
@@ -254,7 +336,7 @@ class EntityServlet(multiprocessing.Process):
 
     def notify_location(self, command, message, to_entities=False):
         """A shortcut for broadcasting a message to the location."""
-        self.outbound_redis.publish(
+        self.sub_manager.publish(
                 "location::e::%s" % self.location,
                 "%s>%s%s" % (self.location, command, message))
 

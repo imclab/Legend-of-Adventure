@@ -65,11 +65,10 @@ class NPC(AnimatSprite, SentientAnimat, MarkovBot):
                 self.train_response(self.last_chat, message)
             self.last_chat = message
 
-    def _attacked(self, attack_distance, attacked_by, attacked_with):
-        super(NPC, self)._attacked(attack_distance, attacked_by, attacked_with)
-        if attack_distance < HURT_DISTANCE * 2.5:
-            if self.holding_item and self.holding_item.startswith("w"):
-                self.chase(attacked_by)
-            else:
-                self.flee(attacked_by)
+    def _attacked(self, attacked_by, attacked_with):
+        super(NPC, self)._attacked(attacked_by, attacked_with)
+        if self.holding_item and self.holding_item.startswith("w"):
+            self.chase(attacked_by)
+        else:
+            self.flee(attacked_by)
 

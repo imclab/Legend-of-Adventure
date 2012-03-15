@@ -37,6 +37,7 @@ Server Dependencies
 Other dependencies can be resolved with: ::
 
     pip install -r requirements.txt
+    git submodule update --init
 
 
 --------------
