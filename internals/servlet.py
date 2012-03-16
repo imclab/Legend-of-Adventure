@@ -192,16 +192,18 @@ class EntityServlet(multiprocessing.Process):
                 # Fire off any waiting events for the entity.
                 entity.fire_events(now=now)
 
+            period_ms = period * 1000
+
             # Do the entity work separately.
             for entity in filter(lambda e: e.has_work(), self.entities):
                 # If the entity has other work to do, take care of it.
-                entity.do_work(period, profiler=profiler)
+                entity.do_work(period_ms, profiler=profiler)
 
             if profiler: profiler.log("player simulation")
 
             # Iterate each player and see if there's any work to do.
             for guid, player in self.players.items():
-                output = player.on_tick(period)
+                output = player.on_tick(period_ms)
                 if output:
                     for entity in self.entities:
                         # Calculate the player's new distance.

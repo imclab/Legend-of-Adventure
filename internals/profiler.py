@@ -10,14 +10,17 @@ IDLE_LOG_CAP = (60 / IDLE_SPARK_DELAY) * 5  # Five minutes
 class Profiler(object):
 
     def __init__(self):
+        now = time.time()
+        self.start_time = now
+
         self.times = {}
-        self.last_time = time.time()
+        self.last_time = now
         self.last_action = "startup"
 
         self.idle_time = 0
         self.total_idle_time = 0
         self.idle_log = []
-        self.last_idle_print = time.time()
+        self.last_idle_print = now
 
     def clear(self):
         """Clear the logged time data."""
@@ -100,9 +103,21 @@ class Profiler(object):
                                       percent))
 
         format("Operation", "Time", "Percent")
+        output.append("-" * len(output[0]))
         format("(idling)", idle_time, idle_time / total * 100)
         for line in percents:
             format(*line)
 
+        uptime = time.time() - self.start_time
+        uptime_unit = "s"
+        if uptime > 60:
+            uptime, uptime_unit = uptime / 60, "min"
+        if uptime > 60:
+            uptime, uptime_unit = uptime / 60, "hours"
+        if uptime > 24:
+            uptime, uptime_unit = uptime / 24, "days"
+
+        print "\nUptime: %.2f%s" % (uptime, uptime_unit)
         print "\n".join(output)
+        print "\n"
 
