@@ -62,7 +62,12 @@ def start():
     internals.comm.brukva = brukva_client
     brukva_setup.setup_brukva(brukva_client)
 
-    tornado.ioloop.IOLoop.instance().start()
+    try:
+        tornado.ioloop.IOLoop.instance().start()
+    except KeyboardInterrupt:
+        # This will shut down gracefully. We don't want to bug the profiler's
+        # output, though.
+        pass
 
 if __name__ == "__main__":
     start()

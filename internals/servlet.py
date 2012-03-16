@@ -1,4 +1,4 @@
-from math import sqrt
+from math import hypot
 from Queue import Queue, Empty
 import random
 import multiprocessing
@@ -12,6 +12,7 @@ from internals.constants import tilesize
 import internals.entities.items as items
 from internals.entities.entities import Animat
 from internals.locations import Location
+from internals.profiler import Profiler
 
 
 redis_host, port = constants.redis.split(":")
@@ -97,8 +98,8 @@ class SimulatedPlayer(object):
         if did_update or self.updated:
             self.updated = False
             x, y = self.position
-            return lambda e: sqrt((e.position[0] - x) ** 2 +
-                                  (e.position[1] - y) ** 2) / tilesize
+            return lambda e: hypot(abs(e.position[0] - x),
+                                   abs(e.position[1] - y)) / tilesize
 
         return None
 
@@ -118,6 +119,8 @@ class EntityServlet(multiprocessing.Process):
         self.players = {}
         self.ttl = None
 
+        self.tick_count = 0
+
     def _end(self):
         # Cancel any TTL timer.
         if self.ttl:
@@ -130,6 +133,13 @@ class EntityServlet(multiprocessing.Process):
         self.terminate()
 
     def run(self):
+        profiler = Profiler()
+        try:
+            self._do_run(profiler)
+        except KeyboardInterrupt:
+            profiler.print_report()
+
+    def _do_run(self, profiler):
         redis_host, port = constants.redis.split(":")
         # We probably don't need a second connection since the pubsub object
         # establishes its own.
@@ -153,13 +163,20 @@ class EntityServlet(multiprocessing.Process):
 
         # Enter the location's game loop.
         while 1:
+            if profiler: profiler.log("loop initialization")
             now = time.time()
             period = now - last_loop_iteration
+
+            self.tick_count += 1
+
+            if profiler: profiler.idle()
 
             # If the duration since the last game tick isn't long enough, wait
             # for a few milliseconds until the time has passed.
             if period < LOOP_TICK:
                 time.sleep(LOOP_TICK - period)
+
+            if profiler: profiler.log("waiting events")
 
             # Handle any waiting events.
             if self.sub_manager.events_waiting():
@@ -168,13 +185,19 @@ class EntityServlet(multiprocessing.Process):
                         continue
                     self._handle_event(event)
 
+            if profiler: profiler.log("entity events")
+
             # Handle any entity-related work.
             for entity in self.entities:
                 # Fire off any waiting events for the entity.
                 entity.fire_events(now=now)
+
+            # Do the entity work separately.
+            for entity in filter(lambda e: e.has_work(), self.entities):
                 # If the entity has other work to do, take care of it.
-                if entity.has_work():
-                    entity.do_work(period)
+                entity.do_work(period, profiler=profiler)
+
+            if profiler: profiler.log("player simulation")
 
             # Iterate each player and see if there's any work to do.
             for guid, player in self.players.items():
@@ -190,6 +213,8 @@ class EntityServlet(multiprocessing.Process):
                         # Save the new distance.
                         entity.remembered_distances[guid] = distance
                         entity.on_player_range(guid, distance)
+
+            if profiler: profiler.log("message flushing")
 
             # Flush any waiting messages to the front end.
             self.sub_manager.flush()

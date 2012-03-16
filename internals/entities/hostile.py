@@ -1,5 +1,3 @@
-from math import sqrt
-
 from internals.constants import CHASE_DISTANCE, HURT_DISTANCE
 from sentient import SentientAnimat
 
@@ -15,7 +13,7 @@ class HostileAnimat(SentientAnimat):
         self.does_attack = True
 
     def _attacked(self, attacked_by, attacked_with):
-        self.harmed_by(attacked_with, guid=attacked_by)
+        super(HostileAnimat, self)._attacked(attacked_by, attacked_with)
 
         if attacked_by != self.chasing:
             self.chase(attacked_by)

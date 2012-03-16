@@ -1,5 +1,5 @@
 import json
-from math import sqrt
+from math import hypot, sqrt
 import random
 import time
 import uuid
@@ -162,8 +162,7 @@ class Entity(object):
         Player position should be passed in pixels, not tiles.
         """
         x, y = map(int, (x, y))
-        distance = sqrt((x - self.position[0]) ** 2 +
-                        (y - self.position[1]) ** 2)
+        distance = hypot(abs(x - self.position[0]), abs(y - self.position[1]))
         distance /= constants.tilesize
 
         distance = int(distance)
@@ -324,7 +323,7 @@ class Animat(Entity, ScheduleHelper):
         """
         return any(self.velocity)
 
-    def do_work(self, duration=0):
+    def do_work(self, duration=0, profiler=None):
         """
         This is the method the fires intermittently as the animat moves across
         the level. It should be used to internally update the animat's
@@ -333,6 +332,8 @@ class Animat(Entity, ScheduleHelper):
         """
 
         if self.dead: return False
+
+        if profiler: profiler.log("ent>calculating new position")
 
         now_moving = any(self.velocity)
         velocity = self.velocity if now_moving else self.old_velocity
@@ -344,6 +345,8 @@ class Animat(Entity, ScheduleHelper):
 
         should_redirect = None
         if now_moving:
+
+            if profiler: profiler.log("ent>hit detection")
             # Calculate the next position in this direction.
             future_position = self._updated_position(*self.position,
                                                      duration=duration)
@@ -355,14 +358,18 @@ class Animat(Entity, ScheduleHelper):
                 now_moving = False
 
         if self.should_weight_directions:
+            if profiler: profiler.log("ent>pathfinding")
             optimal_direction = self._get_best_direction(weighted=True)
             if (optimal_direction is not None and
                 optimal_direction != self.velocity):
                 should_redirect = optimal_direction
 
-        if now_moving and should_redirect:
-            self.move(*should_redirect, event=False)
-        elif now_moving:
+        if now_moving:
+            if should_redirect:
+                if profiler: profiler.log("ent>redirecting")
+                self.move(*should_redirect, event=False)
+
+            if profiler: profiler.log("ent>updating other ents")
             # We're moving, didn't stop, and didn't hit a wall.
             for entity in self.location.entities:
                 if entity is self:
@@ -457,8 +464,8 @@ class Animat(Entity, ScheduleHelper):
 
         self.old_velocity = self.velocity
         self.velocity = x_vel, y_vel
-        now_moving = any(self.velocity)
-        self.layer = 1 if now_moving else 0
+        # TODO: This is where the fix for bug #11 will go.
+        self.layer = 1 if x_vel or y_vel else 0
 
         # Perform hitmapping, but don't take the Y offset into account. We want
         # to hit the left edge properly, but the top edge might actually be

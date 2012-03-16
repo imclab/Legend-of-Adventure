@@ -1,4 +1,4 @@
-from math import asin, pi, sqrt
+from math import asin, hypot, pi
 from random import choice, randint
 import time
 
@@ -105,22 +105,23 @@ class SentientAnimat(Harmable, Animat):
 
         super(SentientAnimat, self).stop_wandering()
 
-    def do_work(self, *args, **kwargs):
+    def do_work(self, duration=0, profiler=None):
         """
         Recalculate all of the distances that we've seen. Don't wait for the
         other person to move.
         """
         # Do the work that the entity has to do first.
-        super(SentientAnimat, self).do_work(*args, **kwargs)
+        super(SentientAnimat, self).do_work(duration, profiler)
 
         # If we're moving, recalculate the distance to other entities.
+        if profiler: profiler.log("ent>sentient>do_work")
         if any(self.velocity):
             x, y = self.position
             for entity in (self.location.entities +
                            self.location.players.values()):
                 e_x, e_y = entity.position
                 self.remembered_distances[entity.id] = (
-                        sqrt((x - e_x) ** 2 + (y - e_y) ** 2) / tilesize)
+                        hypot(abs(x - e_x), abs(y - e_y)) / tilesize)
 
     def _reevaluate_behavior(self):
         """
@@ -195,7 +196,7 @@ class SentientAnimat(Harmable, Animat):
                 rounded to one of the eight cardinal directions. It will be in
                 degrees and not radians to avoid floating point numbers.
                 """
-                pre_trig = ((y - e_y) / sqrt((x - e_x) ** 2 + (y - e_y) ** 2))
+                pre_trig = (y - e_y) / hypot(abs(x - e_x), abs(y - e_y))
                 theta = asin(pre_trig)
 
                 # Convert to degrees so we're not dealing with floating point
@@ -257,8 +258,7 @@ class SentientAnimat(Harmable, Animat):
             if CONVERTED_DIRECTIONS[angle] in usable_directions:
                 return CONVERTED_DIRECTIONS[angle]
             else:
-                for angle_delta in alternate_angles(angle):
-                    new_angle = angle + angle_delta
+                for new_angle in alternate_angles(angle):
                     if CONVERTED_DIRECTIONS[new_angle] in usable_directions:
                         return CONVERTED_DIRECTIONS[new_angle]
                 # We shouldn't ever get here, but if we do, we should just fall
@@ -303,8 +303,8 @@ class SentientAnimat(Harmable, Animat):
 
             # Calculate how far away the hit is.
             a_x, a_y = float(a_x), float(a_y)
-            atk_distance = sqrt((self.position[0] - a_x) ** 2 +
-                                (self.position[1] - a_y) ** 2)
+            atk_distance = hypot(abs(self.position[0] - a_x),
+                                 abs(self.position[1] - a_y))
             # If the attack is too far away, just ignore it.
             if atk_distance > HURT_DISTANCE:
                 return

@@ -4,7 +4,7 @@ import signal
 import redis
 
 import internals.constants as constants
-from internals.entity_servlet import EntityServlet
+from internals.servlet import EntityServlet
 from internals.locations import Location
 
 
