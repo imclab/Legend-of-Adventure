@@ -103,3 +103,7 @@ class Soldier(NPC):
             print "Soldier set to silent"
             self.talking = False
 
+    def wander(self):
+        """Disable wandering for soldiers."""
+        return
+
