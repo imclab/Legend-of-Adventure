@@ -17,7 +17,7 @@ from internals.profiler import Profiler
 
 redis_host, port = constants.redis.split(":")
 
-LOOP_TICK = constants.GAME_LOOP_TICK / 1000
+LOOP_TICK = float(constants.GAME_LOOP_TICK) / 1000
 MESSAGES_TO_IGNORE = ("spa", "epu", )
 MESSAGES_TO_INSPECT = ("del", "cha", )
 
@@ -159,13 +159,14 @@ class EntityServlet(multiprocessing.Process):
             self.on_enter(self._initial_message_data, initial=True)
             self._initial_message_data = None
 
-        last_loop_iteration = 0
+        last_loop_iteration = time.time()
 
         # Enter the location's game loop.
         while 1:
             if profiler: profiler.log("loop initialization")
             now = time.time()
             period = now - last_loop_iteration
+            last_loop_iteration = now
 
             self.tick_count += 1
 
@@ -192,7 +193,7 @@ class EntityServlet(multiprocessing.Process):
                 # Fire off any waiting events for the entity.
                 entity.fire_events(now=now)
 
-            period_ms = period * 1000
+            period_ms = int(period * 1000)
 
             # Do the entity work separately.
             for entity in filter(lambda e: e.has_work(), self.entities):
@@ -220,8 +221,6 @@ class EntityServlet(multiprocessing.Process):
 
             # Flush any waiting messages to the front end.
             self.sub_manager.flush()
-
-            last_loop_iteration = now
 
     def _handle_event(self, event):
         """
@@ -344,7 +343,7 @@ class EntityServlet(multiprocessing.Process):
             else:
                 x, y = random.choice(placeable_locations)
 
-            print "  > %s at (%d, %d)" % (str(entity), x, y)
+            print "  > %s at (%d, %d): %s" % (str(entity), x, y, e.id)
 
             e.place(x * tilesize, y * tilesize)
             self.entities.append(e)
