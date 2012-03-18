@@ -44,7 +44,7 @@ class Profiler(object):
         self.idle_log.append(int(self.idle_time * 1000))
         if len(self.idle_log) > IDLE_LOG_CAP:
             self.idle_log = self.idle_log[len(self.idle_log) - IDLE_LOG_CAP:]
-        print "Idle usage: %ds - %s" % (round(self.idle_time, 2),
+        print "Idle usage: %.2fs - %s" % (self.idle_time,
                                         spark_string(self.idle_log))
 
         # Atomically add in the new idle time and reset the tentative idle
@@ -112,10 +112,10 @@ class Profiler(object):
         uptime_unit = "s"
         if uptime > 60:
             uptime, uptime_unit = uptime / 60, "min"
-        if uptime > 60:
-            uptime, uptime_unit = uptime / 60, "hours"
-        if uptime > 24:
-            uptime, uptime_unit = uptime / 24, "days"
+            if uptime > 60:
+                uptime, uptime_unit = uptime / 60, "hours"
+                if uptime > 24:
+                    uptime, uptime_unit = uptime / 24, "days"
 
         print "\nUptime: %.2f%s" % (uptime, uptime_unit)
         print "\n".join(output)
