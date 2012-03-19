@@ -1,4 +1,4 @@
-from math import asin, hypot, pi
+from math import atan, degrees, hypot, pi
 from random import choice, randint
 import time
 
@@ -12,7 +12,7 @@ from internals.harmable import Harmable
 FLEE = 1
 CHASE = 2
 
-REEVALUATE_TIME = 0.675
+REEVALUATE_TIME = 0.75
 
 CONVERTED_DIRECTIONS = {0: (1, 0), 45: (1, -1), 90: (0, -1), 135: (-1, -1),
                         180: (-1, 0), 225: (-1, 1), 270: (0, 1), 315: (1, 1)}
@@ -52,7 +52,7 @@ class SentientAnimat(Harmable, Animat):
             return
 
         self.fleeing.add(guid)
-        self._behavior_changed()
+        self._reevaluate_behavior()
 
     def stop_fleeing(self, guid):
         """Stop fleeign from a GUID."""
@@ -67,20 +67,7 @@ class SentientAnimat(Harmable, Animat):
             return
 
         self.chasing = guid
-        self._behavior_changed()
-
-    def _behavior_changed(self):
-        if not any(self.velocity):
-            best_direction = self._get_best_direction()
-            if best_direction is None:
-                self.move(0, 0)
-                self.wander()
-                return
-            else:
-                self.move(*best_direction)
-
-        self.schedule(REEVALUATE_TIME + randint(5, 7) / 11,
-                      self._reevaluate_behavior)
+        self._reevaluate_behavior()
 
     def attack(self, guid):
         now = time.time()
@@ -138,31 +125,28 @@ class SentientAnimat(Harmable, Animat):
         if not self.chasing and not is_fleeing:
             self.move(0, 0)
             self.schedule(2, self.wander)
-            if not self.fleeing:
-                return False
-        else:
-            dont_move = False
-            # Toss out an attack if we can.
-            if self.chasing:
-                chasing_distance = self.remembered_distances[self.chasing]
-                if self.does_attack and chasing_distance <= HURT_DISTANCE:
-                    self.attack(self.chasing)
-                if chasing_distance < 2:
-                    self.move(0, 0)
-                    dont_move = True
+            return
 
-            if not dont_move:
-                best_direction = self._get_best_direction(weighted=True)
-                if best_direction is None:
-                    self.move(0, 0)
-                    self.schedule(3, self.wander)
-                    return False
-                elif best_direction != self.velocity:
-                    self.move(*best_direction)
+        dont_move = False
+        # Toss out an attack if we can.
+        if self.chasing:
+            chasing_distance = self.remembered_distances[self.chasing]
+            if self.does_attack and chasing_distance <= HURT_DISTANCE:
+                self.attack(self.chasing)
+            if chasing_distance < 2:
+                self.move(0, 0)
+                dont_move = True
 
-        self.schedule(REEVALUATE_TIME + randint(5, 7) / 11,
-                      self._reevaluate_behavior)
-        return True
+        if not dont_move:
+            best_direction = self._get_best_direction(weighted=True)
+            if best_direction is None:
+                self.move(0, 0)
+                self.schedule(3, self.wander)
+                return
+            elif best_direction != self.velocity:
+                self.move(*best_direction)
+
+        self.schedule(REEVALUATE_TIME, self._reevaluate_behavior)
 
     def _get_best_direction(self, weighted=False):
         """
@@ -196,17 +180,22 @@ class SentientAnimat(Harmable, Animat):
                 rounded to one of the eight cardinal directions. It will be in
                 degrees and not radians to avoid floating point numbers.
                 """
-                pre_trig = (y - e_y) / hypot(abs(x - e_x), abs(y - e_y))
-                theta = asin(pre_trig)
+                if y == e_y:
+                    e_y += 0.01
+                x_leg = e_x - x
+                theta = atan((y - e_y) / x_leg)
+
+                if x_leg < 0:  # Demon math.
+                    theta += pi
 
                 # Convert to degrees so we're not dealing with floating point
-                # numbers.
-                theta /= 2 * pi
-                theta *= 360
+                # numbers, then reverse the direction.
+                theta = degrees(theta)
 
                 # Round to the nearest cardinal direction.
                 theta += 22  # Rounded from 22.5; we don't need to round "back"
                 theta -= theta % 45
+
                 return theta % 360
 
             def alternate_angles(angle):

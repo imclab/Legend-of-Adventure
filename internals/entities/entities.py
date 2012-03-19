@@ -39,6 +39,11 @@ class ScheduleHelper(object):
 
         self.schedule_queue.append((then, callback))
 
+    def deschedule(self, callback):
+        """Deschedules any occurrances of a particular callback."""
+        self.schedule_queue = filter(lambda c: c[1] != callback,
+                                     self.schedule_queue)
+
     def fire_events(self, now=None):
         """Call this function to fire off any events that should have fired."""
         if not now:
@@ -265,7 +270,6 @@ class Animat(Entity, ScheduleHelper):
 
         self.velocity = 0, 0
         self.old_velocity = 0, 0
-        self.should_weight_directions = False
         self.movement_effect = ""
         self.speed = 1
 
@@ -305,9 +309,11 @@ class Animat(Entity, ScheduleHelper):
         """
         pass
 
-    def _updated_position(self, x, y, velocity=None, duration=250):
+    def _updated_position(self, x, y, velocity=None, duration=0):
         if velocity is None:
             velocity = self.velocity
+        if duration == 0:
+            duration = constants.GAME_LOOP_TICK
 
         # Adjust for diagonals
         if all(velocity):
@@ -338,37 +344,28 @@ class Animat(Entity, ScheduleHelper):
         now_moving = any(self.velocity)
         velocity = self.velocity if now_moving else self.old_velocity
 
-        # Calculate the updated position.
-        self.position = self._updated_position(*self.position,
-                                               velocity=velocity,
-                                               duration=duration)
+        if any(velocity):
+            # Calculate the updated position.
+            self.position = self._updated_position(*self.position,
+                                                   velocity=velocity,
+                                                   duration=duration)
 
-        should_redirect = None
         if now_moving:
-
             if profiler: profiler.log("ent>hit detection")
-            # Calculate the next position in this direction.
-            future_position = self._updated_position(*self.position,
-                                                     duration=duration)
-            # If the next position isn't a valid place to move, stop moving.
-            if not self._test_position(future_position, self.velocity):
+            # If the next position isn't a valid place to move, change
+            # direction or stop moving.
+            if not self._test_position(self.position, self.velocity):
                 #self.write_chat("Oh no, I almost hit a wall.")
-                self.move(0, 0)
+                nd_x, nd_y = self._get_best_direction()
+                next_direction_back = nd_x * -1, nd_y * -1
+                if next_direction_back == self.velocity:
+                    self.move(0, 0)
+                else:
+                    self.move(nd_x, nd_y)
                 # Also don't keep calculating the next position.
                 now_moving = False
 
-        if self.should_weight_directions:
-            if profiler: profiler.log("ent>pathfinding")
-            optimal_direction = self._get_best_direction(weighted=True)
-            if (optimal_direction is not None and
-                optimal_direction != self.velocity):
-                should_redirect = optimal_direction
-
         if now_moving:
-            if should_redirect:
-                if profiler: profiler.log("ent>redirecting")
-                self.move(*should_redirect, event=False)
-
             if profiler: profiler.log("ent>updating other ents")
             # We're moving, didn't stop, and didn't hit a wall.
             for entity in self.location.entities:
@@ -376,6 +373,8 @@ class Animat(Entity, ScheduleHelper):
                     continue
                 entity._player_movement(self.id, self.position[0],
                                         self.position[1])
+
+        if profiler: profiler.log("ent>other")
 
     def get_movable_directions(self):
         """
