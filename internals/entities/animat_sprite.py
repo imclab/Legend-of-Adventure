@@ -11,11 +11,10 @@ class AnimatSprite(object):
 
         self._movement_properties = self._movement_properties + ("movement", )
 
-    def move(self, x_vel, y_vel, broadcast=True, event=True):
+    def move(self, *args, **kwargs):
         """Start the animat moving in any direction, or stop it from moving."""
 
-        super(AnimatSprite, self).move(x_vel, y_vel, broadcast=False,
-                                       event=event)
+        super(AnimatSprite, self).move(*args, **kwargs)
 
         views = {(1, 0): "animat.%s.right",
                  (1, 1): "animat.%s.right",

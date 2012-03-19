@@ -342,23 +342,22 @@ class Animat(Entity, ScheduleHelper):
         if profiler: profiler.log("ent>calculating new position")
 
         now_moving = any(self.velocity)
-        velocity = self.velocity if now_moving else self.old_velocity
+        velocity = self.velocity
 
-        if any(velocity):
+        if now_moving:
             # Calculate the updated position.
             self.position = self._updated_position(*self.position,
                                                    velocity=velocity,
                                                    duration=duration)
 
-        if now_moving:
             if profiler: profiler.log("ent>hit detection")
             # If the next position isn't a valid place to move, change
             # direction or stop moving.
-            if not self._test_position(self.position, self.velocity):
+            if not self._test_position(self.position, velocity):
                 #self.write_chat("Oh no, I almost hit a wall.")
                 nd_x, nd_y = self._get_best_direction()
                 next_direction_back = nd_x * -1, nd_y * -1
-                if next_direction_back == self.velocity:
+                if next_direction_back == velocity:
                     self.move(0, 0)
                 else:
                     self.move(nd_x, nd_y)
@@ -461,8 +460,7 @@ class Animat(Entity, ScheduleHelper):
         if not changed:
             return
 
-        self.old_velocity = self.velocity
-        self.velocity = x_vel, y_vel
+        self.old_velocity, self.velocity = self.velocity, (x_vel, y_vel)
         # TODO: This is where the fix for bug #11 will go.
         self.layer = 1 if x_vel or y_vel else 0
 
