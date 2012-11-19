@@ -90,7 +90,7 @@ class Profiler(object):
         percents.reverse()
 
         # Format and print the report.
-        longest_name = max(len(x) for x in ops)
+        longest_name = max(map(len, ops))
         template = "%s | %s | %s"
         output = []
 
@@ -120,4 +120,3 @@ class Profiler(object):
         print "\nUptime: %.2f%s" % (uptime, uptime_unit)
         print "\n".join(output)
         print "\n"
-
