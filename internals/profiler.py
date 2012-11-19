@@ -10,17 +10,14 @@ IDLE_LOG_CAP = (60 / IDLE_SPARK_DELAY) * 5  # Five minutes
 class Profiler(object):
 
     def __init__(self):
-        now = time.time()
-        self.start_time = now
+        self.start_time = self.last_time = self.last_idle_print = time.time()
 
         self.times = {}
-        self.last_time = now
         self.last_action = "startup"
 
         self.idle_time = 0
         self.total_idle_time = 0
         self.idle_log = []
-        self.last_idle_print = now
 
     def clear(self):
         """Clear the logged time data."""
